@@ -212,6 +212,28 @@ class TestOpenRouterProfile:
         assert tl["extra_headers"]["x-grok-conv-id"] == "sess-123"
 
 
+class TestEvoLinkProfile:
+    def test_profile_defaults(self):
+        p = get_provider_profile("evolink")
+        assert p is not None
+        assert p.display_name == "EvoLink"
+        assert p.base_url == "https://direct.evolink.ai/v1"
+        assert p.env_vars == ("EVOLINK_API_KEY", "EVOLINK_BASE_URL")
+        assert p.default_aux_model == "gpt-5.2"
+        assert p.fallback_models == (
+            "gpt-5.2",
+            "gpt-5.1",
+            "gemini-3.1-flash-lite-preview",
+            "deepseek-v4-flash",
+        )
+
+    def test_aliases(self):
+        assert get_provider_profile("evolink-ai").name == "evolink"
+        assert get_provider_profile("evolinkai").name == "evolink"
+        assert get_provider_profile("evo-link").name == "evolink"
+        assert get_provider_profile("evo_link").name == "evolink"
+
+
 class TestNousProfile:
     def test_tags(self):
         from agent.portal_tags import nous_portal_tags
