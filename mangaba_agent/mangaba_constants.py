@@ -376,8 +376,48 @@ def get_config_path() -> Path:
     return get_mangaba_home() / "config.yaml"
 
 
+# Context-local skills-dir override. Lets one agent instance (e.g. the
+# dashboard chat embodying a fleet profile) resolve skills from ANOTHER
+# profile's directory without touching the process-global MANGABA_HOME —
+# concurrent agents in the same process each see their own value.
+_SKILLS_DIR_OVERRIDE: "contextvars.ContextVar[Optional[str]]" = None  # lazy init below
+
+
+def _skills_override_var():
+    global _SKILLS_DIR_OVERRIDE
+    if _SKILLS_DIR_OVERRIDE is None:
+        import contextvars
+
+        _SKILLS_DIR_OVERRIDE = contextvars.ContextVar(
+            "mangaba_skills_dir_override", default=None
+        )
+    return _SKILLS_DIR_OVERRIDE
+
+
+def set_skills_dir_override(path: "Optional[Path | str]"):
+    """Set the context-local skills dir; returns a token for reset_skills_dir_override()."""
+    return _skills_override_var().set(str(path) if path else None)
+
+
+def reset_skills_dir_override(token) -> None:
+    _skills_override_var().reset(token)
+
+
+def get_skills_dir_override() -> "Optional[Path]":
+    value = _skills_override_var().get()
+    return Path(value) if value else None
+
+
 def get_skills_dir() -> Path:
-    """Return the path to the skills directory under MANGABA_HOME."""
+    """Return the path to the skills directory under MANGABA_HOME.
+
+    Honors the context-local override (see ``set_skills_dir_override``);
+    callers that cache this at import time won't see overrides — resolve at
+    use time when per-agent skills matter.
+    """
+    override = get_skills_dir_override()
+    if override is not None:
+        return override
     return get_mangaba_home() / "skills"
 
 

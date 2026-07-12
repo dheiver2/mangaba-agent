@@ -5175,6 +5175,13 @@ def _build_chat_agent(
         ephemeral_system_prompt=soul_prompt,
     )
     agent.suppress_status_output = True
+    # Skills do agente encarnado: cada turno ativa este override context-local
+    # (ver chat_ws.run_turn) para que índice, skills_list e skill_view resolvam
+    # no diretório do profile selecionado, não no do profile ativo.
+    skills_dir = (prof_home / "skills") if prof_home is not None else None
+    agent._mangaba_skills_override = (
+        skills_dir if (skills_dir is not None and skills_dir.is_dir()) else None
+    )
     return agent
 
 
@@ -5319,6 +5326,19 @@ async def chat_ws(ws: WebSocket) -> None:
                     pass
 
             def run_turn() -> None:
+                from mangaba_agent.mangaba_constants import (
+                    reset_skills_dir_override,
+                    set_skills_dir_override,
+                )
+
+                # Skills do profile encarnado — override context-local só
+                # nesta thread de turno; não vaza para outros chats/threads.
+                skills_override = getattr(agent, "_mangaba_skills_override", None)
+                token = (
+                    set_skills_dir_override(skills_override)
+                    if skills_override is not None
+                    else None
+                )
                 try:
                     result = agent.run_conversation(
                         message,
@@ -5333,6 +5353,9 @@ async def chat_ws(ws: WebSocket) -> None:
                     loop.call_soon_threadsafe(queue.put_nowait, {"done": final})
                 except Exception as exc:  # noqa: BLE001
                     loop.call_soon_threadsafe(queue.put_nowait, {"error": str(exc)})
+                finally:
+                    if token is not None:
+                        reset_skills_dir_override(token)
 
             threading.Thread(target=run_turn, daemon=True).start()
 
