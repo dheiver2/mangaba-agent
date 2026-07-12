@@ -1271,7 +1271,13 @@ def get_model_options():
     try:
         from mangaba_cli.inventory import build_models_payload, load_picker_context
 
-        return build_models_payload(load_picker_context(), max_models=50)
+        return build_models_payload(
+            load_picker_context(),
+            max_models=50,
+            include_unconfigured=True,
+            picker_hints=True,
+            canonical_order=True,
+        )
     except Exception:
         _log.exception("GET /api/model/options failed")
         raise HTTPException(status_code=500, detail="Failed to list model options")
@@ -5077,11 +5083,36 @@ def _channel_or_close_code(ws: WebSocket) -> Optional[str]:
     return channel if _VALID_CHANNEL_RE.match(channel) else None
 
 
-def _build_chat_agent(model_override: str = None, provider_override: str = None):
+_PROFILE_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+
+
+def _chat_profile_home(agent_profile: str) -> Optional[Path]:
+    """Resolve the MANGABA_HOME directory of a fleet profile by name.
+
+    Names are validated against a strict charset (no separators) so a
+    WebSocket payload can't path-traverse out of the profiles root.
+    """
+    name = (agent_profile or "").strip()
+    if not name or name.lower() == "default" or not _PROFILE_NAME_RE.match(name):
+        return None
+    prof = Path.home() / ".mangaba" / "profiles" / name
+    return prof if prof.is_dir() else None
+
+
+def _build_chat_agent(
+    model_override: str = None,
+    provider_override: str = None,
+    agent_profile: str = None,
+):
     """Build an AIAgent for the dashboard chat, mirroring the oneshot/CLI path.
 
     ``model_override`` / ``provider_override`` let the Chat tab switch models on
     the fly for testing; when unset, the profile's configured default is used.
+
+    ``agent_profile`` embodies one of the created agents (fleet profiles): its
+    SOUL.md becomes the persona and its configured model/endpoint is used when
+    resolvable, so the Chat tab talks to the agent the user built — the model
+    itself stays whatever was configured on the Models page for that agent.
     """
     from mangaba_cli.config import load_config
     from mangaba_cli.runtime_provider import resolve_runtime_provider
@@ -5089,12 +5120,42 @@ def _build_chat_agent(model_override: str = None, provider_override: str = None)
 
     cfg = load_config()
     model_cfg = cfg.get("model") or {}
+
+    soul_prompt = None
+    use_profile_endpoint = False
+    prof_home = _chat_profile_home(agent_profile) if agent_profile else None
+    if prof_home is not None:
+        soul_path = prof_home / "SOUL.md"
+        if soul_path.exists():
+            soul_prompt = soul_path.read_text(encoding="utf-8").strip() or None
+        pcfg_path = prof_home / "config.yaml"
+        if pcfg_path.exists():
+            try:
+                pmodel = (yaml.safe_load(pcfg_path.read_text(encoding="utf-8")) or {}).get("model") or {}
+                # Only adopt the profile's model block when it's locally
+                # resolvable (explicit endpoint); provider-keyed setups still
+                # resolve through the active profile's credentials below.
+                if pmodel.get("base_url") and (pmodel.get("default") or pmodel.get("name")):
+                    model_cfg = pmodel
+                    use_profile_endpoint = True
+            except Exception:  # noqa: BLE001
+                _log.warning("chat: config.yaml ilegível para o profile %s", agent_profile)
+
     effective_model = str(
         model_override or model_cfg.get("default") or model_cfg.get("name") or ""
     ).strip()
-    runtime = resolve_runtime_provider(
-        requested=(provider_override or None), target_model=effective_model or None
-    )
+    if use_profile_endpoint:
+        runtime = {
+            "api_key": model_cfg.get("api_key") or "x",
+            "base_url": model_cfg.get("base_url"),
+            "provider": model_cfg.get("provider") or "custom",
+            "api_mode": None,
+            "credential_pool": None,
+        }
+    else:
+        runtime = resolve_runtime_provider(
+            requested=(provider_override or None), target_model=effective_model or None
+        )
     try:
         from mangaba_cli.tools_config import _get_platform_tools
         toolsets = sorted(_get_platform_tools(cfg, "cli"))
@@ -5111,6 +5172,7 @@ def _build_chat_agent(model_override: str = None, provider_override: str = None)
         quiet_mode=True,
         platform="cli",
         credential_pool=runtime.get("credential_pool"),
+        ephemeral_system_prompt=soul_prompt,
     )
     agent.suppress_status_output = True
     return agent
@@ -5216,6 +5278,7 @@ async def chat_ws(ws: WebSocket) -> None:
     loop = asyncio.get_event_loop()
     agent = None
     built_model = None  # qual modelo o agente atual foi construído
+    built_profile = None  # qual agente (profile) o chat está encarnando
     history: List[Dict[str, Any]] = []
 
     try:
@@ -5227,15 +5290,21 @@ async def chat_ws(ws: WebSocket) -> None:
 
             model = (data.get("model") or "").strip() or None
             provider = (data.get("provider") or "").strip() or None
+            agent_profile = (data.get("agent") or "").strip() or None
 
-            # (Re)constrói o agente na primeira mensagem ou quando o modelo muda.
-            if agent is None or model != built_model:
-                await ws.send_json({"type": "status", "text": "Carregando modelo…"})
+            # (Re)constrói o agente na primeira mensagem ou quando o modelo
+            # ou o agente (profile) selecionado muda. Trocar de agente zera o
+            # histórico — cada persona conversa do seu próprio contexto.
+            if agent is None or model != built_model or agent_profile != built_profile:
+                await ws.send_json({"type": "status", "text": "Carregando agente…"})
                 try:
                     agent = await loop.run_in_executor(
-                        None, lambda: _build_chat_agent(model, provider)
+                        None, lambda: _build_chat_agent(model, provider, agent_profile)
                     )
+                    if agent_profile != built_profile:
+                        history = []
                     built_model = model
+                    built_profile = agent_profile
                 except Exception as exc:  # noqa: BLE001
                     _log.exception("chat_ws: build agent failed")
                     await ws.send_json({"type": "error", "text": f"Falha ao iniciar o agente: {exc}"})

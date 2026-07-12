@@ -4,6 +4,7 @@ import { ListItem } from "@dheiver2/ui/ui/components/list-item";
 import { Spinner } from "@dheiver2/ui/ui/components/spinner";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
+import { fetchJSON } from "@/lib/api";
 import type { GatewayClient } from "@/lib/gatewayClient";
 import { Check, Search, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -38,6 +39,12 @@ interface ModelOptionProvider {
   total_models?: number;
   is_current?: boolean;
   warning?: string;
+  /** Picker hints (REST /api/model/options with include_unconfigured):
+   *  rows with authenticated=false are canonical providers missing a
+   *  credential; key_env names the env var an API key must land in. */
+  authenticated?: boolean;
+  auth_type?: string;
+  key_env?: string;
 }
 
 interface ModelOptionsResponse {
@@ -91,9 +98,11 @@ export function ModelPickerDialog(props: Props) {
   const [applying, setApplying] = useState(false);
   const closedRef = useRef(false);
 
-  // Load providers + models on open.
-  useEffect(() => {
-    closedRef.current = false;
+  // Load providers + models. Also re-run after an API key is saved so the
+  // freshly-authenticated provider swaps its key panel for its model list.
+  const loadOptions = () => {
+    setLoading(true);
+    setError(null);
 
     const promise = standalone
       ? (loader as () => Promise<ModelOptionsResponse>)()
@@ -105,12 +114,17 @@ export function ModelPickerDialog(props: Props) {
     promise
       .then((r) => {
         if (closedRef.current) return;
-        const next = r?.providers ?? [];
+        const next = [...(r?.providers ?? [])].sort(
+          (a, b) =>
+            Number(b.authenticated !== false) - Number(a.authenticated !== false),
+        );
         setProviders(next);
         setCurrentModel(String(r?.model ?? ""));
         setCurrentProviderSlug(String(r?.provider ?? ""));
-        setSelectedSlug(
-          (next.find((p) => p.is_current) ?? next[0])?.slug ?? "",
+        setSelectedSlug((prev) =>
+          next.some((p) => p.slug === prev)
+            ? prev
+            : ((next.find((p) => p.is_current) ?? next[0])?.slug ?? ""),
         );
         setSelectedModel("");
         setLoading(false);
@@ -120,7 +134,11 @@ export function ModelPickerDialog(props: Props) {
         setError(e instanceof Error ? e.message : String(e));
         setLoading(false);
       });
+  };
 
+  useEffect(() => {
+    closedRef.current = false;
+    loadOptions();
     return () => {
       closedRef.current = true;
     };
@@ -279,6 +297,7 @@ export function ModelPickerDialog(props: Props) {
               // Confirm on next tick so state settles.
               window.setTimeout(confirm, 0);
             }}
+            onConfigured={loadOptions}
           />
         </div>
 
@@ -381,7 +400,9 @@ function ProviderColumn({
                 {p.is_current && <CurrentTag />}
               </div>
               <div className="text-xs text-text-secondary font-mono truncate">
-                {p.slug} · {p.total_models ?? p.models?.length ?? 0} models
+                {p.authenticated === false
+                  ? `${p.slug} · needs key`
+                  : `${p.slug} · ${p.total_models ?? p.models?.length ?? 0} models`}
               </div>
             </div>
           </ListItem>
@@ -404,6 +425,7 @@ function ModelColumn({
   currentProviderSlug,
   onSelect,
   onConfirm,
+  onConfigured,
 }: {
   provider: ModelOptionProvider | null;
   models: string[];
@@ -413,6 +435,7 @@ function ModelColumn({
   currentProviderSlug: string;
   onSelect(model: string): void;
   onConfirm(model: string): void;
+  onConfigured(): void;
 }) {
   if (!provider) {
     return (
@@ -421,6 +444,16 @@ function ModelColumn({
           pick a provider →
         </div>
       </div>
+    );
+  }
+
+  if (provider.authenticated === false) {
+    return (
+      <ProviderKeySetup
+        key={provider.slug}
+        provider={provider}
+        onConfigured={onConfigured}
+      />
     );
   }
 
@@ -470,5 +503,84 @@ function CurrentTag() {
     <span className="text-display text-xs tracking-wider text-primary shrink-0">
       current
     </span>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  Key setup panel (unauthenticated provider)                         */
+/* ------------------------------------------------------------------ */
+
+function ProviderKeySetup({
+  provider,
+  onConfigured,
+}: {
+  provider: ModelOptionProvider;
+  onConfigured(): void;
+}) {
+  const [value, setValue] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const canSaveKey = provider.auth_type === "api_key" && !!provider.key_env;
+
+  const save = async () => {
+    if (!canSaveKey || !value.trim() || saving) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await fetchJSON("/api/env", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ key: provider.key_env, value: value.trim() }),
+      });
+      setValue("");
+      // save_env_value also exports to os.environ, so the reload sees the
+      // provider as authenticated immediately — no dashboard restart.
+      onConfigured();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="overflow-y-auto p-4 space-y-3">
+      <div className="text-xs text-muted-foreground">
+        <span className="font-medium text-foreground">{provider.name}</span>{" "}
+        is not configured yet.
+      </div>
+
+      {canSaveKey ? (
+        <>
+          <Label htmlFor="provider-key-input" className="text-xs">
+            Paste your <span className="font-mono">{provider.key_env}</span>{" "}
+            to activate:
+          </Label>
+          <div className="flex items-center gap-2">
+            <Input
+              id="provider-key-input"
+              type="password"
+              autoComplete="off"
+              placeholder={provider.key_env}
+              value={value}
+              onChange={(e) => setValue(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && save()}
+              className="h-8 text-xs font-mono"
+            />
+            <Button onClick={save} disabled={!value.trim() || saving}>
+              {saving ? <Spinner /> : "Save key"}
+            </Button>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Saved to ~/.mangaba/.env — models load right after.
+          </p>
+          {error && <div className="text-xs text-destructive">{error}</div>}
+        </>
+      ) : (
+        <div className="text-xs text-muted-foreground">
+          {provider.warning ||
+            `This provider uses ${provider.auth_type || "OAuth"} — run \`mangaba model\` in the terminal to configure it.`}
+        </div>
+      )}
+    </div>
   );
 }

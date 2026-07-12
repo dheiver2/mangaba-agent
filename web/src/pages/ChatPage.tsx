@@ -1,14 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Send, Square, RotateCw } from "lucide-react";
-import { MANGABA_BASE_PATH, api } from "@/lib/api";
+import { MANGABA_BASE_PATH, api, type FleetMember } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { StatusDot } from "@/components/StatusDot";
-import { brandModel } from "@/lib/modelBrand";
-
-interface ModelOpt {
-  provider: string;
-  model: string;
-}
 
 // ChatGPT-style chat for the dashboard. Talks to the agent over the
 // /api/chat WebSocket (one turn per message, streamed token-by-token).
@@ -46,8 +40,10 @@ export default function ChatPage() {
   const [connected, setConnected] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [models, setModels] = useState<ModelOpt[]>([]);
-  // "" = usar o modelo padrão configurado
+  // Agentes criados (profiles da frota). "" = agente padrão (config ativa).
+  // O modelo de cada agente já foi definido na página Modelos — aqui só se
+  // escolhe COM QUEM falar, nunca o modelo.
+  const [agents, setAgents] = useState<FleetMember[]>([]);
   const [selected, setSelected] = useState<string>("");
 
   const wsRef = useRef<WebSocket | null>(null);
@@ -151,32 +147,24 @@ export default function ChatPage() {
     };
   }, [connect]);
 
-  // Carrega os modelos disponíveis para o seletor (Ollama local + atual).
+  // Carrega os agentes criados (profiles) para o seletor.
   useEffect(() => {
     api
-      .getChatModels()
+      .getFleet()
       .then((res) => {
-        const flat: ModelOpt[] = (res.models ?? []).map((o) => ({
-          provider: o.provider,
-          model: o.model,
-        }));
-        setModels(flat);
-        if (res.current) {
-          const match = flat.find((o) => o.model === res.current);
-          if (match) setSelected(`${match.provider}::${match.model}`);
-        }
+        setAgents((res.members ?? []).filter((m) => !m.is_default));
       })
       .catch(() => {
-        /* sem lista de modelos — o chat usa o padrão */
+        /* sem frota — o chat usa o agente padrão */
       });
   }, []);
 
-  const onModelChange = (value: string) => {
+  const onAgentChange = (value: string) => {
     setSelected(value);
-    const label = value ? brandModel(value.split("::")[1]) : "modelo padrão";
-    setMessages((prev) => [
-      ...prev,
-      { role: "assistant", content: `🔄 Modelo agora: ${label}`, pending: false },
+    const label = value || "Agente padrão";
+    // Trocar de agente zera o histórico no backend — reflete aqui também.
+    setMessages([
+      { role: "assistant", content: `🔄 Falando agora com: ${label}`, pending: false },
     ]);
   };
 
@@ -195,8 +183,7 @@ export default function ChatPage() {
     ]);
     setInput("");
     setBusy(true);
-    const [provider, model] = selected ? selected.split("::") : ["", ""];
-    ws.send(JSON.stringify({ message: text, model, provider }));
+    ws.send(JSON.stringify({ message: text, agent: selected }));
     setTimeout(scrollToBottom, 0);
   };
 
@@ -215,7 +202,9 @@ export default function ChatPage() {
           M
         </div>
         <div className="flex min-w-0 flex-col">
-          <span className="text-sm font-semibold leading-tight">Mangaba Agent</span>
+          <span className="text-sm font-semibold leading-tight">
+            {selected || "Mangaba Agent"}
+          </span>
           <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
             <StatusDot active={connected} className="h-1.5 w-1.5" />
             {connected ? "Conectado" : "Desconectado"}
@@ -223,18 +212,19 @@ export default function ChatPage() {
         </div>
 
         <div className="ml-auto flex items-center gap-2">
-          {models.length > 0 && (
+          {agents.length > 0 && (
             <select
               value={selected}
-              onChange={(e) => onModelChange(e.target.value)}
-              title="Trocar o modelo para testar"
-              aria-label="Selecionar modelo"
+              onChange={(e) => onAgentChange(e.target.value)}
+              title="Escolher com qual agente conversar"
+              aria-label="Selecionar agente"
               className="max-w-[180px] rounded-md border border-input bg-background px-2 py-1 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
             >
-              <option value="">Modelo padrão</option>
-              {models.map((o) => (
-                <option key={`${o.provider}::${o.model}`} value={`${o.provider}::${o.model}`}>
-                  {brandModel(o.model)}
+              <option value="">Agente padrão</option>
+              {agents.map((a) => (
+                <option key={a.name} value={a.name}>
+                  {a.name}
+                  {a.description ? ` — ${a.description.slice(0, 40)}` : ""}
                 </option>
               ))}
             </select>
