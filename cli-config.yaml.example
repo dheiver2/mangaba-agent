@@ -1098,3 +1098,16 @@ display:
 #     - command: "~/.mangaba/agent-hooks/log-orchestration.sh"
 #
 # hooks_auto_accept: false
+
+# =============================================================================
+# Audit Trail (governança multi-agente)
+# =============================================================================
+# O gateway grava uma trilha de auditoria JSONL por profile em
+# $MANGABA_HOME/audit/YYYY-MM.jsonl: sessões, turnos do agente e comandos
+# slash, com plataforma/usuário/canal. Por padrão grava só METADADOS
+# (ids, comando, tamanhos) — o conteúdo de mensagens/respostas só entra
+# com include_content: true.
+#
+# audit:
+#   enabled: true           # false desliga a trilha
+#   include_content: false  # true grava message/response (truncados a 300 chars)

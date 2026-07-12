@@ -231,3 +231,33 @@ def test_delete_agent_not_found(monkeypatch):
     _fake_profiles(monkeypatch, exists=False)
     ok, msg = fleet.delete_agent("ghost", confirm=True)
     assert ok is False and "não encontrado" in msg
+
+
+# ---------------------------------------------------------------------------
+# Uso do dia por profile (lido direto do ledger de cada profile)
+# ---------------------------------------------------------------------------
+def test_usage_today_reads_profile_ledger(tmp_path):
+    import json as _json
+    import time as _time
+    day = _time.strftime("%Y-%m-%d")
+    usage_dir = tmp_path / "usage"
+    usage_dir.mkdir(parents=True)
+    (usage_dir / f"{day[:7]}.json").write_text(_json.dumps({
+        day: {"input": 1200, "output": 300, "turns": 7},
+        "2020-01-01": {"input": 999999, "output": 0, "turns": 99},
+    }))
+    tokens, turns = fleet._usage_today_for(tmp_path)
+    assert tokens == 1500 and turns == 7
+
+
+def test_usage_today_missing_ledger_is_zero(tmp_path):
+    assert fleet._usage_today_for(tmp_path) == (0, 0)
+
+
+def test_render_includes_usage(patched, monkeypatch):
+    monkeypatch.setattr(fleet, "_usage_today_for",
+                        lambda path: (12500, 9) if "empresa1" in str(path) else (0, 0))
+    out = fleet.render_fleet(fleet.collect_fleet())
+    assert "12.5k tok / 9 turno(s)" in out
+    # Sem turnos hoje → sem sufixo de uso.
+    assert out.count("tok /") == 1

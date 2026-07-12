@@ -55,11 +55,26 @@ class HookRegistry:
     def _register_builtin_hooks(self) -> None:
         """Register built-in hooks that are always active.
 
-        Currently empty — no shipped built-in hooks. Kept as the extension
-        point for future always-on gateway hooks so they drop in without
-        re-plumbing discover_and_load().
+        Built-ins ship with the gateway (``gateway/builtin_hooks/``) and are
+        registered before user hooks from ``~/.mangaba/hooks/``. Each module
+        gates itself via config, so "always registered" ≠ "always writing".
         """
-        return
+        try:
+            from gateway.builtin_hooks import audit
+
+            for event in audit.EVENTS:
+                self._handlers.setdefault(event, []).append(audit.handle)
+            self._loaded_hooks.append({
+                "name": "audit",
+                "description": (
+                    "Trilha de auditoria JSONL em $MANGABA_HOME/audit/ "
+                    "(desligável com audit.enabled: false)"
+                ),
+                "events": list(audit.EVENTS),
+                "path": "builtin:gateway.builtin_hooks.audit",
+            })
+        except Exception as e:  # noqa: BLE001 — built-in nunca trava o startup
+            print(f"[hooks] Error loading builtin audit hook: {e}", flush=True)
 
     def discover_and_load(self) -> None:
         """

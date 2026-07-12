@@ -36,6 +36,8 @@ class FleetMember:
     description: str = ""
     is_default: bool = False
     platforms: List[dict] = field(default_factory=list)
+    tokens_today: int = 0
+    turns_today: int = 0
 
 
 def _pid_for(profile_path: Path) -> Optional[int]:
@@ -44,6 +46,32 @@ def _pid_for(profile_path: Path) -> Optional[int]:
         return get_running_pid(profile_path / "gateway.pid", cleanup_stale=False)
     except Exception:
         return None
+
+
+def _usage_today_for(profile_path: Path) -> Tuple[int, int]:
+    """(tokens in+out, turnos) de hoje, lidos do usage ledger do profile.
+
+    Lê o arquivo direto (``<profile>/usage/YYYY-MM.json``) em vez do módulo
+    ``usage_ledger``, que é ancorado no MANGABA_HOME *ativo* — a frota precisa
+    enxergar o ledger de cada profile, não só o do profile atual.
+    """
+    try:
+        day = time.strftime("%Y-%m-%d")
+        data = json.loads(
+            (profile_path / "usage" / f"{day[:7]}.json").read_text(encoding="utf-8")
+        )
+        d = data.get(day) or {}
+        return int(d.get("input", 0)) + int(d.get("output", 0)), int(d.get("turns", 0))
+    except Exception:
+        return 0, 0
+
+
+def _fmt_tokens(n: int) -> str:
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.1f}M"
+    if n >= 1_000:
+        return f"{n / 1_000:.1f}k"
+    return str(n)
 
 
 def collect_fleet() -> List[FleetMember]:
@@ -63,6 +91,7 @@ def collect_fleet() -> List[FleetMember]:
         except Exception as exc:  # noqa: BLE001
             logger.debug("fleet: plataformas indisponíveis para %s: %s", p.name, exc)
             platforms = []
+        tokens_today, turns_today = _usage_today_for(p.path)
         members.append(FleetMember(
             name=p.name, path=p.path,
             running=bool(p.gateway_running), pid=pid,
@@ -71,6 +100,7 @@ def collect_fleet() -> List[FleetMember]:
             description=getattr(p, "description", "") or "",
             is_default=getattr(p, "is_default", False),
             platforms=platforms,
+            tokens_today=tokens_today, turns_today=turns_today,
         ))
     members.sort(key=lambda m: (not m.running, m.name))  # no ar primeiro
     return members
@@ -95,8 +125,12 @@ def render_fleet(members: List[FleetMember], *, markdown: bool = False) -> str:
         dot = "🟢" if m.running else "⚪"
         model = m.model or "?"
         pid = f" · pid {m.pid}" if m.pid else ""
+        usage = (
+            f" · hoje: {_fmt_tokens(m.tokens_today)} tok / {m.turns_today} turno(s)"
+            if m.turns_today else ""
+        )
         name = f"`{m.name}`" if markdown else m.name
-        lines.append(f"{dot} {name} — {model}{pid}")
+        lines.append(f"{dot} {name} — {model}{pid}{usage}")
         if m.description:
             lines.append(f"    ↳ {m.description[:80]}")
     return "\n".join(lines)
