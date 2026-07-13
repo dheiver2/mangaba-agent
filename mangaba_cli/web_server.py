@@ -5099,6 +5099,56 @@ def _chat_profile_home(agent_profile: str) -> Optional[Path]:
     return prof if prof.is_dir() else None
 
 
+def _parse_profile_dotenv(prof_home: Path) -> Dict[str, str]:
+    """Parse ``<profile>/.env`` into a dict (best-effort, sem exportar)."""
+    out: Dict[str, str] = {}
+    try:
+        for line in (prof_home / ".env").read_text(encoding="utf-8-sig").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            out[key.strip()] = value.strip().strip('"').strip("'")
+    except Exception:  # noqa: BLE001
+        pass
+    return out
+
+
+def _chat_profile_mcp_servers(prof_home: Path) -> Dict[str, dict]:
+    """``mcp_servers`` do config.yaml do profile, com ``${VAR}`` interpolado.
+
+    A interpolação usa o ambiente do processo + o ``.env`` do próprio profile
+    (sem exportá-lo — chaves de um agente não vazam para os outros).
+    """
+    try:
+        cfg = yaml.safe_load((prof_home / "config.yaml").read_text(encoding="utf-8")) or {}
+    except Exception:  # noqa: BLE001
+        return {}
+    servers = cfg.get("mcp_servers")
+    if not servers or not isinstance(servers, dict):
+        return {}
+
+    env = dict(os.environ)
+    env.update(_parse_profile_dotenv(prof_home))
+    var_re = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
+
+    def _interp(value):
+        if isinstance(value, str):
+            return var_re.sub(lambda m: env.get(m.group(1), m.group(0)), value)
+        if isinstance(value, dict):
+            return {k: _interp(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [_interp(v) for v in value]
+        return value
+
+    return {
+        str(name): _interp(server_cfg)
+        for name, server_cfg in servers.items()
+        if isinstance(server_cfg, dict)
+        and str(server_cfg.get("enabled", "true")).lower() not in ("false", "0", "no")
+    }
+
+
 def _build_chat_agent(
     model_override: str = None,
     provider_override: str = None,
@@ -5162,6 +5212,26 @@ def _build_chat_agent(
     except Exception:  # noqa: BLE001
         toolsets = None
 
+    # MCPs do agente encarnado: conecta os servidores do profile (o registry
+    # do processo é idempotente por nome — colisão de nome entre profiles usa
+    # a primeira conexão) e isola por toolset: o agente ganha os seus
+    # ``mcp-<servidor>`` e perde os do profile ativo que não sejam dele.
+    disabled_toolsets = None
+    if prof_home is not None:
+        try:
+            from tools.mcp_tool import _load_mcp_config, register_mcp_servers
+
+            profile_servers = _chat_profile_mcp_servers(prof_home)
+            if profile_servers:
+                register_mcp_servers(profile_servers)
+                toolsets = (toolsets or []) + [f"mcp-{n}" for n in profile_servers]
+            active_servers = set(_load_mcp_config() or {})
+            foreign = active_servers - set(profile_servers)
+            if foreign:
+                disabled_toolsets = [f"mcp-{n}" for n in sorted(foreign)]
+        except Exception:  # noqa: BLE001
+            _log.warning("chat: MCPs do profile %s indisponíveis", agent_profile, exc_info=True)
+
     agent = AIAgent(
         api_key=runtime.get("api_key"),
         base_url=runtime.get("base_url"),
@@ -5169,6 +5239,7 @@ def _build_chat_agent(
         api_mode=runtime.get("api_mode"),
         model=effective_model or None,
         enabled_toolsets=toolsets,
+        disabled_toolsets=disabled_toolsets,
         quiet_mode=True,
         platform="cli",
         credential_pool=runtime.get("credential_pool"),
