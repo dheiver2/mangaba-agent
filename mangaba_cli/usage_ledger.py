@@ -44,7 +44,7 @@ class _FileLock:
         try:
             import fcntl
 
-            self._fh = open(_usage_dir() / ".lock", "w")
+            self._fh = open(_usage_dir() / ".lock", "w", encoding="utf-8")
             fcntl.flock(self._fh, fcntl.LOCK_EX)
         except Exception:
             self._fh = None

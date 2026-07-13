@@ -1,0 +1,67 @@
+name: CI
+
+# CI mínimo do Mangaba Agent — lint + testes (Python e frontend).
+# Substitui os workflows do fork upstream (desativados). Roda em PRs e
+# em pushes para main. Integração/e2e ficam de fora (o runner os pula por
+# padrão); promova-os a um job dedicado com secrets quando fizer sentido.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint (ruff)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+      - name: ruff check
+        run: uvx ruff@0.15.10 check .
+
+  frontend:
+    name: Frontend (tsc + vitest)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install deps
+        run: npm ci
+      - name: Typecheck
+        run: npx tsc -b
+      - name: Unit tests
+        run: npx vitest run
+
+  python-tests:
+    name: Python tests (slice ${{ matrix.slice }}/6)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        slice: [1, 2, 3, 4, 5, 6]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+      - name: Set up Python 3.11
+        run: uv python install 3.11
+      - name: Install project (all + dev extras)
+        run: |
+          uv venv .venv --python 3.11
+          uv pip install -e ".[all,dev]"
+      - name: Run test slice
+        run: |
+          source .venv/bin/activate
+          python scripts/run_tests_parallel.py --slice ${{ matrix.slice }}/6
