@@ -4,7 +4,7 @@ import { ListItem } from "@dheiver2/ui/ui/components/list-item";
 import { Spinner } from "@dheiver2/ui/ui/components/spinner";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
-import { fetchJSON } from "@/lib/api";
+import { api, fetchJSON, type ModelTestResponse } from "@/lib/api";
 import { Check, Search, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -75,6 +75,8 @@ export function ModelPickerDialog(props: Props) {
   const [query, setQuery] = useState("");
   const [persistGlobal, setPersistGlobal] = useState(alwaysGlobal);
   const [applying, setApplying] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<ModelTestResponse | null>(null);
   const closedRef = useRef(false);
 
   // Load providers + models. Also re-run after an API key is saved so the
@@ -162,6 +164,30 @@ export function ModelPickerDialog(props: Props) {
   );
 
   const canConfirm = !!selectedProvider && !!selectedModel && !applying;
+
+  // Limpa o resultado do teste quando muda a seleção — o veredito é sobre o
+  // par (provider, modelo) que estava selecionado.
+  useEffect(() => {
+    setTestResult(null);
+  }, [selectedSlug, selectedModel]);
+
+  const testConnection = async () => {
+    if (!selectedProvider || !selectedModel || testing) return;
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const r = await api.testModelConnection(selectedProvider.slug, selectedModel);
+      setTestResult(r);
+    } catch (e) {
+      setTestResult({
+        ok: false,
+        reachable: false,
+        error: e instanceof Error ? e.message : String(e),
+      });
+    } finally {
+      setTesting(false);
+    }
+  };
 
   const confirm = async () => {
     if (!canConfirm || !selectedProvider) return;
@@ -265,6 +291,38 @@ export function ModelPickerDialog(props: Props) {
           />
         </div>
 
+        {testResult && (
+          <div
+            className={`border-t px-3 py-2 text-xs ${
+              testResult.ok
+                ? "border-border bg-success/10 text-success"
+                : "border-border bg-destructive/10 text-destructive"
+            }`}
+          >
+            <div className="font-medium">
+              {testResult.ok
+                ? "✓ Conexão OK — o endpoint aceitou este modelo."
+                : testResult.reachable
+                  ? "✗ Endpoint respondeu, mas rejeitou o modelo."
+                  : "✗ Não foi possível alcançar o endpoint."}
+            </div>
+            {testResult.error && (
+              <div className="mt-0.5 text-text-secondary">{testResult.error}</div>
+            )}
+            {(testResult.context_length || testResult.available_count) && (
+              <div className="mt-0.5 font-mono text-text-secondary">
+                {testResult.context_length
+                  ? `janela: ${testResult.context_length.toLocaleString()} tokens`
+                  : ""}
+                {testResult.context_length && testResult.available_count ? " · " : ""}
+                {testResult.available_count
+                  ? `${testResult.available_count} modelo(s) no endpoint`
+                  : ""}
+              </div>
+            )}
+          </div>
+        )}
+
         <footer className="border-t border-border p-3 flex items-center justify-between gap-3 flex-wrap">
           {alwaysGlobal ? (
             <span className="text-xs text-muted-foreground">
@@ -290,6 +348,14 @@ export function ModelPickerDialog(props: Props) {
           )}
 
           <div className="flex items-center gap-2 ml-auto">
+            <Button
+              outlined
+              onClick={testConnection}
+              disabled={!selectedProvider || !selectedModel || testing || applying}
+              title="Confere se o endpoint aceita este modelo antes de salvar"
+            >
+              {testing ? <Spinner /> : "Testar conexão"}
+            </Button>
             <Button outlined onClick={onClose} disabled={applying}>
               Cancel
             </Button>

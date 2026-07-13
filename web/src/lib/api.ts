@@ -97,6 +97,13 @@ export const api = {
   getDefaults: () => fetchJSON<Record<string, unknown>>("/api/config/defaults"),
   getSchema: () => fetchJSON<{ fields: Record<string, unknown>; category_order: string[] }>("/api/config/schema"),
   getModelOptions: () => fetchJSON<ModelOptionsResponse>("/api/model/options"),
+
+  testModelConnection: (provider: string, model: string) =>
+    fetchJSON<ModelTestResponse>("/api/model/test-connection", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ provider, model }),
+    }),
   getChatModels: () => fetchJSON<ChatModelsResponse>("/api/chat/models"),
 
   // ── Memória ────────────────────────────────────────────────────────────
@@ -927,6 +934,19 @@ export interface ModelOptionsResponse {
   model?: string;
   provider?: string;
   providers?: ModelOptionProvider[];
+}
+
+export interface ModelTestResponse {
+  ok: boolean;
+  reachable: boolean;
+  valid?: boolean | null;
+  provider?: string;
+  base_url?: string;
+  model?: string;
+  available_sample?: string[];
+  available_count?: number;
+  context_length?: number | null;
+  error?: string | null;
 }
 
 export interface ChatModelsResponse {

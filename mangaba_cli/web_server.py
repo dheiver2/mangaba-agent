@@ -1160,6 +1160,150 @@ _AUX_TASK_SLOTS: Tuple[str, ...] = (
 )
 
 
+class ModelTestRequest(BaseModel):
+    provider: Optional[str] = None
+    model: Optional[str] = None
+
+
+def _extract_context_length(entry: dict) -> Optional[int]:
+    """Best-effort: janela de contexto de um item de /v1/models.
+
+    Providers OpenAI-compatíveis expõem o campo com nomes variados
+    (``context_length``, ``context_window``, ``max_context_length`` …) —
+    tenta os conhecidos, no nível raiz e sob ``meta``/``capabilities``.
+    """
+    for holder in (entry, entry.get("meta") or {}, entry.get("capabilities") or {}):
+        if not isinstance(holder, dict):
+            continue
+        for key in ("context_length", "context_window", "max_context_length",
+                    "max_context_window", "context_size"):
+            val = holder.get(key)
+            if isinstance(val, int) and val > 0:
+                return val
+    return None
+
+
+def _probe_models_list(base_url: str, api_key: str, model: Optional[str]) -> dict:
+    """GET {base_url}/models — enriquece o teste com a lista e o context_length.
+
+    Best-effort: falha silenciosa (nem todo endpoint expõe /models). Serve só
+    para exibir os modelos disponíveis e a janela de contexto; NÃO é o veredito
+    de validade (aliases como ``deepseek-chat`` funcionam em completions sem
+    aparecer aqui).
+    """
+    import json as _json
+    import urllib.request
+
+    out = {"available_sample": [], "available_count": 0, "context_length": None}
+    try:
+        req = urllib.request.Request(f"{base_url}/models")
+        if api_key:
+            req.add_header("Authorization", f"Bearer {api_key}")
+        with urllib.request.urlopen(req, timeout=6) as resp:
+            payload = _json.loads(resp.read().decode("utf-8"))
+        items = payload.get("data") if isinstance(payload, dict) else payload
+        items = items if isinstance(items, list) else []
+        out["available_count"] = len(items)
+        out["available_sample"] = [
+            str(it.get("id") or it.get("name") or "")
+            for it in items[:12] if isinstance(it, dict)
+        ]
+        if model:
+            for it in items:
+                if isinstance(it, dict) and model in (it.get("id"), it.get("name")):
+                    out["context_length"] = _extract_context_length(it)
+                    break
+    except Exception:  # noqa: BLE001
+        pass
+    return out
+
+
+@app.post("/api/model/test-connection")
+def test_model_connection(body: ModelTestRequest):
+    """Testa se (provider, modelo) responde de fato ANTES de salvar.
+
+    Veredito = uma completion mínima (max_tokens=1) contra o endpoint
+    resolvido do provider. É o único teste confiável entre providers: pega o
+    erro clássico de trocar o modelo sem o provider certo (modelo pedido ao
+    endpoint errado → HTTP 400/404 "modelo inválido"), e vale para aliases
+    (``deepseek-chat``) que não aparecem em /models. Enriquece com a lista de
+    modelos e a janela de contexto quando o endpoint as expõe.
+    """
+    import json as _json
+    import urllib.error
+    import urllib.request
+
+    provider = (body.provider or "").strip() or None
+    model = (body.model or "").strip() or None
+    if not model:
+        return {"ok": False, "reachable": False, "provider": provider,
+                "error": "Informe o modelo para testar."}
+    try:
+        from mangaba_cli.runtime_provider import resolve_runtime_provider
+
+        rt = resolve_runtime_provider(requested=provider, target_model=model)
+        base_url = str(rt.get("base_url") or "").rstrip("/")
+        api_key = rt.get("api_key") or ""
+        resolved_provider = rt.get("provider")
+        if not base_url:
+            return {
+                "ok": False, "reachable": False, "provider": resolved_provider,
+                "error": "Provider sem base_url resolvível — configure a chave/endpoint antes de testar.",
+            }
+
+        enrich = _probe_models_list(base_url, api_key, model)
+
+        # Veredito: completion mínima no wire OpenAI (o caso dominante — custom
+        # endpoints e a maioria dos providers cloud). Para wire nativo Anthropic
+        # etc., cai no /models como sinal secundário.
+        body_bytes = _json.dumps({
+            "model": model,
+            "messages": [{"role": "user", "content": "ping"}],
+            "max_tokens": 1,
+            "stream": False,
+        }).encode("utf-8")
+        req = urllib.request.Request(f"{base_url}/chat/completions", data=body_bytes)
+        req.add_header("Content-Type", "application/json")
+        if api_key:
+            req.add_header("Authorization", f"Bearer {api_key}")
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                resp.read()
+            return {
+                "ok": True, "reachable": True, "valid": True,
+                "provider": resolved_provider, "base_url": base_url, "model": model,
+                "error": None, **enrich,
+            }
+        except urllib.error.HTTPError as he:
+            detail = ""
+            try:
+                detail = he.read().decode("utf-8")[:300]
+            except Exception:  # noqa: BLE001
+                pass
+            invalid = he.code in (400, 404) and (
+                "model" in detail.lower() or "inválid" in detail.lower() or "invalid" in detail.lower()
+            )
+            return {
+                "ok": False, "reachable": True, "valid": not invalid,
+                "provider": resolved_provider, "base_url": base_url, "model": model,
+                "error": (
+                    f"'{model}' rejeitado pelo endpoint (HTTP {he.code}) — provável provider/modelo incompatível."
+                    if invalid else
+                    f"Endpoint respondeu HTTP {he.code} ao testar '{model}'. {detail[:160]}"
+                ),
+                **enrich,
+            }
+        except Exception as exc:  # noqa: BLE001 — rede/timeout/DNS
+            return {
+                "ok": False, "reachable": False, "valid": None,
+                "provider": resolved_provider, "base_url": base_url, "model": model,
+                "error": f"Não consegui alcançar o endpoint: {exc}", **enrich,
+            }
+    except Exception as exc:  # noqa: BLE001
+        _log.exception("POST /api/model/test-connection failed")
+        return {"ok": False, "reachable": False, "provider": provider, "error": str(exc)}
+
+
 @app.get("/api/model/options")
 def get_model_options():
     """Return authenticated providers + their curated model lists.
