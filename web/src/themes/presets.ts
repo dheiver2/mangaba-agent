@@ -161,6 +161,67 @@ export const mangabaLightTheme: DashboardTheme = {
   },
 };
 
+/**
+ * Mangaba Pro — dark admin no padrão shadcn/ui (zinc-950, cards elevados,
+ * bordas sutis, cantos bem arredondados), com o laranja da marca como acento.
+ *
+ * Contraste verificado (WCAG AA):
+ *   #FAFAFA on #09090B → 19.2:1 ✓  (texto primário)
+ *   #9B9BA4 on #09090B →  7.1:1 ✓  (texto secundário/mutedForeground)
+ *   #F5841F on #09090B →  8.0:1 ✓  (accent/primary)
+ */
+export const mangabaProTheme: DashboardTheme = {
+  name: "mangaba-pro",
+  label: "Mangaba Pro",
+  description: "Dark admin — zinc profundo, cards elevados e laranja da marca",
+  palette: {
+    background: { hex: "#09090B", alpha: 1 },
+    midground:  { hex: "#FAFAFA", alpha: 1 },
+    foreground: { hex: "#FFFFFF", alpha: 0 },
+    warmGlow:   "rgba(245, 132, 31, 0.10)",
+    noiseOpacity: 0.2,
+  },
+  typography: {
+    ...DEFAULT_TYPOGRAPHY,
+    fontSans: `"Inter", ${SYSTEM_SANS}`,
+    fontMono: `"JetBrains Mono", ${SYSTEM_MONO}`,
+    fontDisplay: `"Inter", ${SYSTEM_SANS}`,
+    fontUrl:
+      "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap",
+    letterSpacing: "-0.01em",
+  },
+  layout: {
+    ...DEFAULT_LAYOUT,
+    radius: "0.85rem",
+  },
+  colorOverrides: {
+    primary:           "#F5841F",
+    primaryForeground: "#160D06",
+
+    card:              "#121215",
+    cardForeground:    "#FAFAFA",
+    popover:           "#0E0E11",
+    popoverForeground: "#FAFAFA",
+
+    secondary:          "#1A1A1F",
+    secondaryForeground:"#FAFAFA",
+    muted:              "#1A1A1F",
+    mutedForeground:    "#9B9BA4",
+
+    accent:            "#1F1F25",
+    accentForeground:  "#F5A24B",
+
+    border: "#232329",
+    input:  "#232329",
+    ring:   "#F5841F",
+
+    success:              "#4ADE80",
+    warning:              "#FBBF24",
+    destructive:          "#EF4444",
+    destructiveForeground:"#ffffff",
+  },
+};
+
 export const midnightTheme: DashboardTheme = {
   name: "midnight",
   label: "Midnight",
@@ -401,6 +462,7 @@ export const claudeTheme: DashboardTheme = {
 };
 
 export const BUILTIN_THEMES: Record<string, DashboardTheme> = {
+  "mangaba-pro": mangabaProTheme,
   default: defaultTheme,
   "mangaba-light": mangabaLightTheme,
   "default-large": defaultLargeTheme,

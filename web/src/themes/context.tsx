@@ -28,7 +28,7 @@ import { api } from "@/lib/api";
 const STORAGE_KEY = "mangaba-dashboard-theme";
 
 /** Canonical dark / light theme names for the day-night toggle. */
-export const NIGHT_THEME = "default";
+export const NIGHT_THEME = "mangaba-pro";
 export const DAY_THEME   = "mangaba-light";
 
 /** Light-background theme names — used to derive `isDark`. */
@@ -314,7 +314,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   /** Name of the currently active theme (built-in id or user YAML name). */
   const [themeName, setThemeName] = useState<string>(() => {
     if (typeof window === "undefined") return "default";
-    return window.localStorage.getItem(STORAGE_KEY) ?? "claude";
+    return window.localStorage.getItem(STORAGE_KEY) ?? "mangaba-pro";
   });
 
   /** All selectable themes (shown in the picker). Starts with just the
