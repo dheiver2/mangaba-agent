@@ -3,6 +3,7 @@ import { Button } from "@dheiver2/ui/ui/components/button";
 import { useNavigate } from "react-router-dom";
 import { Stagger, StaggerItem } from "@/components/motion";
 import { AgentStatus } from "@/components/AgentStatus";
+import { HomeMetrics } from "@/components/HomeMetrics";
 
 const STEPS = [
   {
@@ -66,6 +67,10 @@ export default function HomePage() {
     <Stagger className="space-y-6 pb-6" gap={0.09}>
       <StaggerItem>
         <AgentStatus />
+      </StaggerItem>
+
+      <StaggerItem>
+        <HomeMetrics />
       </StaggerItem>
 
       <StaggerItem>
