@@ -23,6 +23,7 @@ import { useConfirmDelete } from "@/hooks/useConfirmDelete";
 import { useModalBehavior } from "@/hooks/useModalBehavior";
 import { Toast } from "@/components/Toast";
 import { Card, CardContent } from "@/components/ui/card";
+import { ModelPickerDialog } from "@/components/ModelPickerDialog";
 import { Badge } from "@dheiver2/ui/ui/components/badge";
 import { Button } from "@dheiver2/ui/ui/components/button";
 import { Input } from "@/components/ui/input";
@@ -194,10 +195,8 @@ export default function ProfilesPage() {
   const [soulText, setSoulText] = useState("");
   const [soulSaving, setSoulSaving] = useState(false);
 
-  // Editor inline de modelo por profile (sem trocar o profile ativo).
-  const [editingModelFor, setEditingModelFor] = useState<string | null>(null);
-  const [modelText, setModelText] = useState("");
-  const [modelSaving, setModelSaving] = useState(false);
+  // Picker de provedor+modelo por profile (sem trocar o profile ativo).
+  const [pickingModelFor, setPickingModelFor] = useState<string | null>(null);
 
   // Catálogo de agentes verticais prontos (templates).
   const [templates, setTemplates] = useState<AgentTemplate[]>([]);
@@ -214,33 +213,16 @@ export default function ProfilesPage() {
       .finally(() => setLoading(false));
   }, [showToast, t.status.error]);
 
-  const openModelEditor = async (name: string) => {
-    if (editingModelFor === name) {
-      setEditingModelFor(null);
-      return;
-    }
-    setEditingModelFor(name);
-    setModelText("");
-    try {
-      const r = await api.getProfileModel(name);
-      setModelText(r.model || "");
-    } catch {
-      /* mantém vazio */
-    }
-  };
-
-  const saveModel = async (name: string) => {
-    setModelSaving(true);
-    try {
-      await api.setProfileModel(name, modelText.trim());
-      showToast(`Modelo do perfil "${name}" salvo.`, "success");
-      setEditingModelFor(null);
-      load();
-    } catch (e) {
-      showToast(`${t.status.error}: ${e}`, "error");
-    } finally {
-      setModelSaving(false);
-    }
+  const applyProfileModel = async (
+    name: string,
+    args: { provider: string; model: string },
+  ) => {
+    await api.setProfileModel(name, args.model, args.provider);
+    showToast(
+      `Modelo de "${name}" salvo. Reinicie o gateway dele na Frota para aplicar.`,
+      "success",
+    );
+    load();
   };
 
   useEffect(() => {
@@ -645,7 +627,7 @@ export default function ProfilesPage() {
                   <div className="flex items-center gap-4 text-xs text-muted-foreground flex-wrap">
                     <button
                       type="button"
-                      onClick={() => openModelEditor(p.name)}
+                      onClick={() => setPickingModelFor(p.name)}
                       className="inline-flex items-center gap-1 rounded px-1 -mx-1 hover:bg-muted/50 hover:text-foreground"
                       title="Editar modelo deste agente"
                     >
@@ -661,26 +643,14 @@ export default function ProfilesPage() {
                     </span>
                   </div>
 
-                  {editingModelFor === p.name && (
-                    <div className="mt-2 flex flex-wrap items-center gap-2">
-                      <Input
-                        autoFocus
-                        value={modelText}
-                        onChange={(e) => setModelText(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") saveModel(p.name);
-                          if (e.key === "Escape") setEditingModelFor(null);
-                        }}
-                        placeholder="ex.: Qwen/Qwen2.5-72B-Instruct"
-                        className="max-w-sm font-mono text-xs"
-                      />
-                      <Button size="sm" onClick={() => saveModel(p.name)} disabled={modelSaving}>
-                        {modelSaving ? "Salvando…" : t.common.save}
-                      </Button>
-                      <Button size="sm" ghost onClick={() => setEditingModelFor(null)}>
-                        {t.common.cancel}
-                      </Button>
-                    </div>
+                  {pickingModelFor === p.name && (
+                    <ModelPickerDialog
+                      title={`Modelo de ${p.name}`}
+                      alwaysGlobal
+                      loader={api.getModelOptions}
+                      onApply={(args) => applyProfileModel(p.name, args)}
+                      onClose={() => setPickingModelFor(null)}
+                    />
                   )}
                 </div>
 

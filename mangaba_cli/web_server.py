@@ -4159,6 +4159,7 @@ async def update_profile_soul(name: str, body: ProfileSoulUpdate):
 
 class ProfileModelUpdate(BaseModel):
     model: str  # ex.: "Qwen/Qwen2.5-7B-Instruct" — default+name
+    provider: Optional[str] = None  # slug do picker (anthropic, copilot, custom, …)
 
 
 @app.get("/api/profiles/{name}/model")
@@ -4192,12 +4193,22 @@ async def set_profile_model(name: str, body: ProfileModelUpdate):
             m = {} if not m else {"default": str(m), "name": str(m)}
         m["default"] = body.model.strip()
         m["name"] = body.model.strip()
+        provider = (body.provider or "").strip()
+        if provider:
+            m["provider"] = provider
+            if provider != "custom":
+                # base_url/api_key pertencem ao endpoint custom antigo — ao
+                # trocar para um provider nomeado, a resolução de credenciais
+                # passa a ser por slug+env; manter o endpoint velho apontaria
+                # o modelo novo para o servidor errado.
+                m.pop("base_url", None)
+                m.pop("api_key", None)
         cfg["model"] = m
         cfg_path.write_text(yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False), encoding="utf-8")
     except Exception as e:  # noqa: BLE001
         _log.exception("PUT /api/profiles/%s/model failed", name)
         raise HTTPException(status_code=500, detail=str(e))
-    return {"ok": True, "model": body.model.strip()}
+    return {"ok": True, "model": body.model.strip(), "provider": provider or None}
 
 
 # ── Teams por agente (1 bot por agente) ─────────────────────────────────────

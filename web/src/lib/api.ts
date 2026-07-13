@@ -385,13 +385,13 @@ export const api = {
     fetchJSON<{ model: string; provider: string }>(
       `/api/profiles/${encodeURIComponent(name)}/model`,
     ),
-  setProfileModel: (name: string, model: string) =>
-    fetchJSON<{ ok: boolean; model: string }>(
+  setProfileModel: (name: string, model: string, provider?: string) =>
+    fetchJSON<{ ok: boolean; model: string; provider?: string | null }>(
       `/api/profiles/${encodeURIComponent(name)}/model`,
       {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model }),
+        body: JSON.stringify({ model, provider }),
       },
     ),
 
