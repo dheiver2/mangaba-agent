@@ -111,9 +111,6 @@ def _load_or_create_session_token() -> str:
 _SESSION_TOKEN = _load_or_create_session_token()
 _SESSION_HEADER_NAME = "X-Mangaba-Session-Token"
 
-# In-browser Chat tab (/chat, /api/pty, …).  Off unless ``mangaba dashboard --tui``
-# or MANGABA_DASHBOARD_TUI=1.  Set from :func:`start_server`.
-_DASHBOARD_EMBEDDED_CHAT_ENABLED = False
 
 # Simple rate limiter for the reveal endpoint
 _reveal_timestamps: List[float] = []
@@ -4852,7 +4849,6 @@ async def get_models_analytics(days: int = 30):
 import re
 import asyncio
 
-_VALID_CHANNEL_RE = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 # Starlette's TestClient reports the peer as "testclient"; treat it as
 # loopback so tests don't need to rewrite request scope.
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost", "testclient"})
@@ -4875,34 +4871,6 @@ def _ws_client_is_allowed(ws: "WebSocket") -> bool:
     if not client_host:
         return True
     return client_host in _LOOPBACK_HOSTS
-
-# Per-channel subscriber registry used by /api/pub (PTY-side gateway → dashboard)
-# and /api/events (dashboard → browser sidebar).  Keyed by an opaque channel id
-# the chat tab generates on mount; entries auto-evict when the last subscriber
-# drops AND the publisher has disconnected.
-_event_channels: dict[str, set] = {}
-_event_lock = asyncio.Lock()
-
-
-async def _broadcast_event(channel: str, payload: str) -> None:
-    """Fan out one publisher frame to every subscriber on `channel`."""
-    async with _event_lock:
-        subs = list(_event_channels.get(channel, ()))
-
-    for sub in subs:
-        try:
-            await sub.send_text(payload)
-        except Exception:
-            # Subscriber went away mid-send; the /api/events finally clause
-            # will remove it from the registry on its next iteration.
-            _log.warning("broadcast send failed for subscriber on %s", channel, exc_info=True)
-
-
-def _channel_or_close_code(ws: WebSocket) -> Optional[str]:
-    """Return the channel id from the query string or None if invalid."""
-    channel = ws.query_params.get("channel", "")
-
-    return channel if _VALID_CHANNEL_RE.match(channel) else None
 
 
 _PROFILE_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
@@ -5276,121 +5244,6 @@ async def chat_ws(ws: WebSocket) -> None:
 
 
 # ---------------------------------------------------------------------------
-# /api/ws — JSON-RPC WebSocket sidecar for the dashboard "Chat" tab.
-#
-# Drives the same `tui_gateway.dispatch` surface Ink uses over stdio, so the
-# dashboard can render structured metadata (model badge, tool-call sidebar,
-# slash launcher, session info) alongside the xterm.js terminal that PTY
-# already paints. Both transports bind to the same session id when one is
-# active, so a tool.start emitted by the agent fans out to both sinks.
-# ---------------------------------------------------------------------------
-
-
-@app.websocket("/api/ws")
-async def gateway_ws(ws: WebSocket) -> None:
-    if not _DASHBOARD_EMBEDDED_CHAT_ENABLED:
-        await ws.close(code=4403)
-        return
-
-    token = ws.query_params.get("token", "")
-    if not hmac.compare_digest(token.encode(), _SESSION_TOKEN.encode()):
-        await ws.close(code=4401)
-        return
-
-    if not _ws_client_is_allowed(ws):
-        await ws.close(code=4403)
-        return
-
-    from tui_gateway.ws import handle_ws
-
-    await handle_ws(ws)
-
-
-# ---------------------------------------------------------------------------
-# /api/pub + /api/events — chat-tab event broadcast.
-#
-# The PTY-side ``tui_gateway.entry`` opens /api/pub at startup (driven by
-# MANGABA_TUI_SIDECAR_URL set in /api/pty's PTY env) and writes every
-# dispatcher emit through it.  The dashboard fans those frames out to any
-# subscriber that opened /api/events on the same channel id.  This is what
-# gives the React sidebar its tool-call feed without breaking the PTY
-# child's stdio handshake with Ink.
-# ---------------------------------------------------------------------------
-
-
-@app.websocket("/api/pub")
-async def pub_ws(ws: WebSocket) -> None:
-    if not _DASHBOARD_EMBEDDED_CHAT_ENABLED:
-        await ws.close(code=4403)
-        return
-
-    token = ws.query_params.get("token", "")
-    if not hmac.compare_digest(token.encode(), _SESSION_TOKEN.encode()):
-        await ws.close(code=4401)
-        return
-
-    if not _ws_client_is_allowed(ws):
-        await ws.close(code=4403)
-        return
-
-    channel = _channel_or_close_code(ws)
-    if not channel:
-        await ws.close(code=4400)
-        return
-
-    await ws.accept()
-
-    try:
-        while True:
-            await _broadcast_event(channel, await ws.receive_text())
-    except WebSocketDisconnect:
-        pass
-
-
-@app.websocket("/api/events")
-async def events_ws(ws: WebSocket) -> None:
-    if not _DASHBOARD_EMBEDDED_CHAT_ENABLED:
-        await ws.close(code=4403)
-        return
-
-    token = ws.query_params.get("token", "")
-    if not hmac.compare_digest(token.encode(), _SESSION_TOKEN.encode()):
-        await ws.close(code=4401)
-        return
-
-    if not _ws_client_is_allowed(ws):
-        await ws.close(code=4403)
-        return
-
-    channel = _channel_or_close_code(ws)
-    if not channel:
-        await ws.close(code=4400)
-        return
-
-    await ws.accept()
-
-    async with _event_lock:
-        _event_channels.setdefault(channel, set()).add(ws)
-
-    try:
-        while True:
-            # Subscribers don't speak — the receive() just blocks until
-            # disconnect so the connection stays open as long as the
-            # browser holds it.
-            await ws.receive_text()
-    except WebSocketDisconnect:
-        pass
-    finally:
-        async with _event_lock:
-            subs = _event_channels.get(channel)
-
-            if subs is not None:
-                subs.discard(ws)
-
-                if not subs:
-                    _event_channels.pop(channel, None)
-
-
 def _normalise_prefix(raw: Optional[str]) -> str:
     """Normalise an X-Forwarded-Prefix header value.
 
@@ -5446,10 +5299,8 @@ def mount_spa(application: FastAPI):
         or empty string when served at root.
         """
         html = _index_path.read_text()
-        chat_js = "true" if _DASHBOARD_EMBEDDED_CHAT_ENABLED else "false"
         token_script = (
             f'<script>window.__MANGABA_SESSION_TOKEN__="{_SESSION_TOKEN}";'
-            f"window.__MANGABA_DASHBOARD_EMBEDDED_CHAT__={chat_js};"
             f'window.__MANGABA_BASE_PATH__="{prefix}";</script>'
         )
         if prefix:
@@ -6372,14 +6223,9 @@ def start_server(
     port: int = 9119,
     open_browser: bool = True,
     allow_public: bool = False,
-    *,
-    embedded_chat: bool = False,
 ):
     """Start the web UI server."""
     import uvicorn
-
-    global _DASHBOARD_EMBEDDED_CHAT_ENABLED
-    _DASHBOARD_EMBEDDED_CHAT_ENABLED = embedded_chat
 
     _LOCALHOST = ("127.0.0.1", "localhost", "::1")
     if host not in _LOCALHOST and not allow_public:

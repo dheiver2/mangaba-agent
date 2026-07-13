@@ -10646,13 +10646,11 @@ def cmd_dashboard(args):
         _autostart_gateway_if_needed()
         _reconcile_client_agents_async()
 
-    embedded_chat = args.tui or os.environ.get("MANGABA_DASHBOARD_TUI") == "1"
     start_server(
         host=args.host,
         port=args.port,
         open_browser=not args.no_open,
         allow_public=getattr(args, "insecure", False),
-        embedded_chat=embedded_chat,
     )
 
 
@@ -13880,14 +13878,6 @@ Examples:
         "--insecure",
         action="store_true",
         help="Allow binding to non-localhost (DANGEROUS: exposes API keys on the network)",
-    )
-    dashboard_parser.add_argument(
-        "--tui",
-        action="store_true",
-        help=(
-            "Expose the in-browser Chat tab (embedded `mangaba --tui` via PTY/WebSocket). "
-            "Alternatively set MANGABA_DASHBOARD_TUI=1."
-        ),
     )
     dashboard_parser.add_argument(
         "--skip-build",
