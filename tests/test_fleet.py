@@ -261,3 +261,61 @@ def test_render_includes_usage(patched, monkeypatch):
     assert "12.5k tok / 9 turno(s)" in out
     # Sem turnos hoje → sem sufixo de uso.
     assert out.count("tok /") == 1
+
+
+# ---------------------------------------------------------------------------
+# Handle do bot do Telegram (getMe com cache por token)
+# ---------------------------------------------------------------------------
+def test_telegram_handle_uses_cache(tmp_path, monkeypatch):
+    import hashlib, json as _json
+    token = "123:abc"
+    fp = hashlib.sha256(token.encode()).hexdigest()[:16]
+    (tmp_path / ".telegram_bot_handle.json").write_text(
+        _json.dumps({"token_fp": fp, "handle": "@meu_bot"})
+    )
+    # Rede proibida — cache deve bastar.
+    import urllib.request as _url
+    monkeypatch.setattr(_url, "urlopen", lambda *a, **k: (_ for _ in ()).throw(AssertionError("rede!")))
+    assert fleet._telegram_bot_handle(tmp_path, token) == "@meu_bot"
+
+
+def test_telegram_handle_token_change_invalidates_cache(tmp_path, monkeypatch):
+    import json as _json
+    (tmp_path / ".telegram_bot_handle.json").write_text(
+        _json.dumps({"token_fp": "outro", "handle": "@velho_bot"})
+    )
+    class _Resp:
+        def read(self): return _json.dumps({"result": {"username": "novo_bot"}}).encode()
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+    import urllib.request as _url
+    monkeypatch.setattr(_url, "urlopen", lambda *a, **k: _Resp())
+    assert fleet._telegram_bot_handle(tmp_path, "tok2") == "@novo_bot"
+    # E regrava o cache novo.
+    cached = _json.loads((tmp_path / ".telegram_bot_handle.json").read_text())
+    assert cached["handle"] == "@novo_bot"
+
+
+def test_telegram_handle_offline_returns_none(tmp_path, monkeypatch):
+    import urllib.request as _url
+    monkeypatch.setattr(_url, "urlopen", lambda *a, **k: (_ for _ in ()).throw(OSError("offline")))
+    assert fleet._telegram_bot_handle(tmp_path, "tok") is None
+
+
+def test_platforms_surfaces_telegram_token_without_platforms_block(tmp_path, monkeypatch):
+    # Profile só com token no .env (sem bloco platforms no config).
+    (tmp_path / "config.yaml").write_text("model:\n  default: x\n")
+    (tmp_path / ".env").write_text("TELEGRAM_BOT_TOKEN=123:abc\n")
+    monkeypatch.setattr(fleet, "_telegram_bot_handle", lambda path, tok: "@so_token_bot")
+    plats = fleet._platforms_for_profile(tmp_path)
+    tg = [p for p in plats if p["platform"] == "telegram"]
+    assert len(tg) == 1
+    assert tg[0]["handle"] == "@so_token_bot"
+    assert tg[0]["has_token"] is True
+
+
+def test_platforms_no_telegram_without_token(tmp_path):
+    (tmp_path / "config.yaml").write_text("model:\n  default: x\n")
+    (tmp_path / ".env").write_text("OUTRA=coisa\n")
+    plats = fleet._platforms_for_profile(tmp_path)
+    assert not any(p["platform"] == "telegram" for p in plats)

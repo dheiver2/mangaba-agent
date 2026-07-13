@@ -283,6 +283,43 @@ _PLATFORM_TOKEN_VARS: dict = {
 }
 
 
+def _telegram_bot_handle(profile_path: Path, token: str) -> Optional[str]:
+    """@username do bot do Telegram — getMe com cache em disco por token.
+
+    O cache evita uma chamada de rede a cada render da frota; trocar o token
+    invalida (chave = fingerprint do token). Best-effort: sem rede, sem handle.
+    """
+    import hashlib
+    import urllib.request
+
+    cache_path = profile_path / ".telegram_bot_handle.json"
+    fingerprint = hashlib.sha256(token.encode()).hexdigest()[:16]
+    try:
+        cached = json.loads(cache_path.read_text(encoding="utf-8"))
+        if cached.get("token_fp") == fingerprint and cached.get("handle"):
+            return cached["handle"]
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        with urllib.request.urlopen(
+            f"https://api.telegram.org/bot{token}/getMe", timeout=4
+        ) as resp:
+            username = (json.loads(resp.read()).get("result") or {}).get("username")
+        if not username:
+            return None
+        handle = f"@{username}"
+        try:
+            cache_path.write_text(
+                json.dumps({"token_fp": fingerprint, "handle": handle}),
+                encoding="utf-8",
+            )
+        except Exception:  # noqa: BLE001
+            pass
+        return handle
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _platforms_for_profile(profile_path: Path) -> List[dict]:
     """Lê config.yaml do profile e retorna lista de plataformas com metadados."""
     cfg_path = profile_path / "config.yaml"
@@ -320,13 +357,37 @@ def _platforms_for_profile(profile_path: Path) -> List[dict]:
         hc = pcfg.get("home_channel")
         home_channel = hc if isinstance(hc, dict) else None
         token_var = _PLATFORM_TOKEN_VARS.get(plat_name)
-        has_token = bool(token_var and (env_vars.get(token_var) or os.environ.get(token_var)))
-        out.append({
+        token_value = (env_vars.get(token_var) or os.environ.get(token_var, "")) if token_var else ""
+        has_token = bool(token_value)
+        entry = {
             "platform": plat_name,
             "enabled": enabled,
             "home_channel": home_channel,
             "has_token": has_token,
-        })
+        }
+        if plat_name == "telegram" and token_value:
+            handle = _telegram_bot_handle(profile_path, token_value)
+            if handle:
+                entry["handle"] = handle
+        out.append(entry)
+
+    # Profiles sem bloco ``platforms.telegram`` mas COM token no .env: o bot
+    # existe e é a que o agente responde — surfaça-o para o dashboard mostrar
+    # a qual @ o profile está associado.
+    if not any(e["platform"] == "telegram" for e in out):
+        tg_token = env_vars.get("TELEGRAM_BOT_TOKEN", "")  # só o .env do profile — não vaza o token ambiente
+        if tg_token:
+            entry = {
+                "platform": "telegram",
+                "enabled": True,
+                "home_channel": None,
+                "has_token": True,
+            }
+            handle = _telegram_bot_handle(profile_path, tg_token)
+            if handle:
+                entry["handle"] = handle
+            out.append(entry)
+
     return out
 
 

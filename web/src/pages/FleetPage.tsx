@@ -26,6 +26,7 @@ import type { FleetMember } from "@/lib/api";
 
 interface PlatformInfo {
   platform: string;
+  handle?: string;
   enabled: boolean;
   home_channel?: { chat_id: string; name?: string };
   has_token: boolean;
@@ -91,6 +92,17 @@ function ChannelsPanel({
                       <span className="font-medium capitalize">
                         {p.platform}
                       </span>
+                      {p.handle && (
+                        <a
+                          href={`https://t.me/${p.handle.replace(/^@/, "")}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="font-mono text-xs text-primary hover:underline"
+                          title="Abrir o bot no Telegram"
+                        >
+                          {p.handle}
+                        </a>
+                      )}
                       {p.has_token ? (
                         <Badge tone="success" className="text-xs">
                           token ✓
@@ -357,6 +369,17 @@ export default function FleetPage() {
                           <span className="font-medium capitalize">
                             {p.platform}
                           </span>
+                          {p.handle && (
+                            <a
+                              href={`https://t.me/${p.handle.replace(/^@/, "")}`}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="font-mono text-primary hover:underline"
+                              title="Abrir o bot no Telegram"
+                            >
+                              {p.handle}
+                            </a>
+                          )}
                           {p.has_token ? (
                             <Badge tone="success" className="text-xs">
                               token ✓
