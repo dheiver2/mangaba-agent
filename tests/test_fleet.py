@@ -319,3 +319,36 @@ def test_platforms_no_telegram_without_token(tmp_path):
     (tmp_path / ".env").write_text("OUTRA=coisa\n")
     plats = fleet._platforms_for_profile(tmp_path)
     assert not any(p["platform"] == "telegram" for p in plats)
+
+
+# ---------------------------------------------------------------------------
+# Teto de tokens por-profile (governança por-agente)
+# ---------------------------------------------------------------------------
+def test_fleet_budget_roundtrip(tmp_path, monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+    from mangaba_cli import web_server as ws
+
+    (tmp_path / "config.yaml").write_text("model:\n  default: x\n")
+    monkeypatch.setattr(ws, "_fleet_member_path_or_404", lambda name: tmp_path)
+
+    got = asyncio.run(ws.get_fleet_member_budget("x"))
+    assert got == {"daily_token_limit": 0, "budget_mode": "warn"}
+
+    asyncio.run(ws.set_fleet_member_budget("x", ws.FleetBudget(daily_token_limit=2_000_000, budget_mode="block")))
+    got = asyncio.run(ws.get_fleet_member_budget("x"))
+    assert got == {"daily_token_limit": 2_000_000, "budget_mode": "block"}
+    # preserva o resto do config
+    import yaml as _yaml
+    cfg = _yaml.safe_load((tmp_path / "config.yaml").read_text())
+    assert cfg["model"]["default"] == "x"
+
+
+def test_fleet_budget_mode_sanitized(tmp_path, monkeypatch):
+    import asyncio
+    from mangaba_cli import web_server as ws
+    (tmp_path / "config.yaml").write_text("{}\n")
+    monkeypatch.setattr(ws, "_fleet_member_path_or_404", lambda name: tmp_path)
+    r = asyncio.run(ws.set_fleet_member_budget("x", ws.FleetBudget(daily_token_limit=-5, budget_mode="lixo")))
+    assert r["budget_mode"] == "warn"        # modo inválido → warn
+    assert r["daily_token_limit"] == 0        # negativo → 0

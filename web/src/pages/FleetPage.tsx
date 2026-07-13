@@ -10,6 +10,7 @@ import {
   ChevronDown,
   ChevronRight,
   Settings,
+  Gauge,
 } from "lucide-react";
 import { Button } from "@dheiver2/ui/ui/components/button";
 import { Badge } from "@dheiver2/ui/ui/components/badge";
@@ -150,6 +151,7 @@ export default function FleetPage() {
   const [logText, setLogText] = useState("");
   const [broadcast, setBroadcast] = useState("");
   const [channelsFor, setChannelsFor] = useState<FleetMemberWithPlatforms | null>(null);
+  const [budgetFor, setBudgetFor] = useState<string | null>(null);
   const [expandedChannels, setExpandedChannels] = useState<Set<string>>(new Set());
   const { toast, showToast } = useToast();
 
@@ -318,6 +320,14 @@ export default function FleetPage() {
                   <Button
                     outlined
                     size="sm"
+                    onClick={() => setBudgetFor(m.name)}
+                    title="Teto de tokens diário deste agente"
+                  >
+                    <Gauge className="h-4 w-4" /> Teto
+                  </Button>
+                  <Button
+                    outlined
+                    size="sm"
                     onClick={() => act(m.name, "restart")}
                     disabled={busy === `${m.name}:restart`}
                   >
@@ -419,6 +429,14 @@ export default function FleetPage() {
         />
       )}
 
+      {budgetFor && (
+        <BudgetModal
+          name={budgetFor}
+          onClose={() => setBudgetFor(null)}
+          onSaved={(msg) => showToast(msg, "success")}
+        />
+      )}
+
       {/* Logs panel */}
       {logsFor && (
         <div
@@ -443,6 +461,127 @@ export default function FleetPage() {
       )}
 
       <Toast toast={toast} />
+    </div>
+  );
+}
+
+// ── Modal de teto de tokens por agente (governança por-profile) ─────────────
+function BudgetModal({
+  name,
+  onClose,
+  onSaved,
+}: {
+  name: string;
+  onClose(): void;
+  onSaved(msg: string): void;
+}) {
+  const [limit, setLimit] = useState("");
+  const [mode, setMode] = useState<"warn" | "block">("warn");
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    api
+      .getFleetBudget(name)
+      .then((b) => {
+        setLimit(b.daily_token_limit ? String(b.daily_token_limit) : "");
+        setMode(b.budget_mode);
+      })
+      .catch((e) => setError((e as Error).message))
+      .finally(() => setLoading(false));
+  }, [name]);
+
+  const save = async () => {
+    setSaving(true);
+    setError(null);
+    try {
+      await api.setFleetBudget(name, parseInt(limit || "0", 10) || 0, mode);
+      onSaved(
+        `Teto de "${name}" salvo. Reinicie o gateway do agente para aplicar.`,
+      );
+      onClose();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-md rounded-lg bg-background shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between border-b p-3">
+          <span className="font-medium">Teto de tokens · {name}</span>
+          <Button ghost size="sm" onClick={onClose}>
+            <X className="h-4 w-4" />
+          </Button>
+        </div>
+        <div className="space-y-4 p-4">
+          {loading ? (
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Spinner className="h-4 w-4" /> Carregando…
+            </div>
+          ) : (
+            <>
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-muted-foreground">
+                  Limite diário de tokens (0 = sem teto)
+                </label>
+                <Input
+                  type="number"
+                  min={0}
+                  value={limit}
+                  onChange={(e) => setLimit(e.target.value)}
+                  placeholder="ex.: 2000000"
+                  className="font-mono text-sm"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-muted-foreground">
+                  Ao atingir o teto
+                </label>
+                <div className="flex gap-2">
+                  <Button
+                    outlined={mode !== "warn"}
+                    size="sm"
+                    onClick={() => setMode("warn")}
+                  >
+                    Apenas avisar
+                  </Button>
+                  <Button
+                    outlined={mode !== "block"}
+                    size="sm"
+                    onClick={() => setMode("block")}
+                  >
+                    Bloquear
+                  </Button>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Para agentes em canais públicos, recomenda-se um teto com
+                  <span className="font-medium"> Bloquear</span> — contém loop
+                  descontrolado sem derrubar os demais.
+                </p>
+              </div>
+              {error && <div className="text-xs text-destructive">{error}</div>}
+            </>
+          )}
+        </div>
+        <div className="flex justify-end gap-2 border-t p-3">
+          <Button outlined size="sm" onClick={onClose} disabled={saving}>
+            Cancelar
+          </Button>
+          <Button size="sm" onClick={save} disabled={loading || saving}>
+            {saving ? <Spinner className="h-4 w-4" /> : "Salvar"}
+          </Button>
+        </div>
+      </div>
     </div>
   );
 }

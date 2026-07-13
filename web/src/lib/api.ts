@@ -554,6 +554,17 @@ export const api = {
       `/api/fleet/${encodeURIComponent(name)}/${action}`,
       { method: "POST" },
     ),
+  getFleetBudget: (name: string) =>
+    fetchJSON<FleetBudget>(`/api/fleet/${encodeURIComponent(name)}/budget`),
+  setFleetBudget: (name: string, daily_token_limit: number, budget_mode: "warn" | "block") =>
+    fetchJSON<{ ok: boolean; daily_token_limit: number; budget_mode: string }>(
+      `/api/fleet/${encodeURIComponent(name)}/budget`,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ daily_token_limit, budget_mode }),
+      },
+    ),
   fleetBroadcast: (message: string) =>
     fetchJSON<{ ok: boolean; reached: number; channels: number; skipped: string[] }>(
       "/api/fleet/broadcast",
@@ -634,6 +645,11 @@ export const api = {
       { method: "POST" },
     ),
 };
+
+export interface FleetBudget {
+  daily_token_limit: number;
+  budget_mode: "warn" | "block";
+}
 
 export interface FleetMember {
   name: string;

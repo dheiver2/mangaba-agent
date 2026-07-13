@@ -874,6 +874,62 @@ async def fleet_broadcast(body: FleetBroadcast):
         raise HTTPException(status_code=500, detail=str(exc))
 
 
+class FleetBudget(BaseModel):
+    daily_token_limit: int = 0
+    budget_mode: str = "warn"  # "warn" | "block"
+
+
+def _fleet_member_path_or_404(name: str) -> Path:
+    from mangaba_cli import fleet as _fleet
+
+    m = _fleet.find_member(name)
+    if m is None:
+        raise HTTPException(status_code=404, detail=f"Agente '{name}' não encontrado")
+    return m.path
+
+
+@app.get("/api/fleet/{name}/budget")
+async def get_fleet_member_budget(name: str):
+    """Teto de tokens diário do profile (lido do config.yaml dele)."""
+    path = _fleet_member_path_or_404(name)
+    try:
+        cfg = yaml.safe_load((path / "config.yaml").read_text(encoding="utf-8")) or {}
+    except Exception:  # noqa: BLE001
+        cfg = {}
+    usage = cfg.get("usage") if isinstance(cfg.get("usage"), dict) else {}
+    return {
+        "daily_token_limit": int(usage.get("daily_token_limit", 0) or 0),
+        "budget_mode": usage.get("budget_mode", "warn") if usage.get("budget_mode") in ("warn", "block") else "warn",
+    }
+
+
+@app.put("/api/fleet/{name}/budget")
+async def set_fleet_member_budget(name: str, body: FleetBudget):
+    """Grava o teto diário + modo (avisar/bloquear) no config.yaml do profile.
+
+    Governança por-agente: profiles em canais públicos podem ter teto próprio
+    em modo ``block``, sem afetar os demais. Requer reiniciar o gateway do
+    agente para valer nas sessões em andamento.
+    """
+    path = _fleet_member_path_or_404(name)
+    cfg_path = path / "config.yaml"
+    mode = body.budget_mode if body.budget_mode in ("warn", "block") else "warn"
+    try:
+        cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) if cfg_path.exists() else {}
+        cfg = cfg or {}
+        usage = cfg.get("usage")
+        if not isinstance(usage, dict):
+            usage = {}
+        usage["daily_token_limit"] = max(0, int(body.daily_token_limit or 0))
+        usage["budget_mode"] = mode
+        cfg["usage"] = usage
+        cfg_path.write_text(yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    except Exception as exc:  # noqa: BLE001
+        _log.exception("PUT /api/fleet/%s/budget failed", name)
+        raise HTTPException(status_code=500, detail=str(exc))
+    return {"ok": True, "daily_token_limit": usage["daily_token_limit"], "budget_mode": mode}
+
+
 @app.get("/api/fleet/{name}/platforms")
 async def get_fleet_member_platforms(name: str):
     """Retorna a configuração de plataformas de um profile."""
