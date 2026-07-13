@@ -96,7 +96,6 @@ export const api = {
   getConfig: () => fetchJSON<Record<string, unknown>>("/api/config"),
   getDefaults: () => fetchJSON<Record<string, unknown>>("/api/config/defaults"),
   getSchema: () => fetchJSON<{ fields: Record<string, unknown>; category_order: string[] }>("/api/config/schema"),
-  getModelInfo: () => fetchJSON<ModelInfoResponse>("/api/model/info"),
   getModelOptions: () => fetchJSON<ModelOptionsResponse>("/api/model/options"),
   getChatModels: () => fetchJSON<ChatModelsResponse>("/api/chat/models"),
 
@@ -381,10 +380,6 @@ export const api = {
     fetchJSON<{ ok: boolean }>(`/api/profiles/${encodeURIComponent(name)}/teams`, {
       method: "DELETE",
     }),
-  getProfileModel: (name: string) =>
-    fetchJSON<{ model: string; provider: string }>(
-      `/api/profiles/${encodeURIComponent(name)}/model`,
-    ),
   setProfileModel: (name: string, model: string, provider?: string) =>
     fetchJSON<{ ok: boolean; model: string; provider?: string | null }>(
       `/api/profiles/${encodeURIComponent(name)}/model`,
@@ -615,15 +610,6 @@ export const api = {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ reason }),
-      },
-    ),
-  kanbanAssignTask: (board: string, id: string, assignee: string) =>
-    fetchJSON<{ ok: boolean }>(
-      `/api/kanban/tasks/${encodeURIComponent(id)}/assign?board=${encodeURIComponent(board)}`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ assignee }),
       },
     ),
   kanbanCommentTask: (board: string, id: string, commentBody: string) =>
@@ -923,22 +909,6 @@ export interface SessionSearchResponse {
 }
 
 // ── Model info types ──────────────────────────────────────────────────
-
-export interface ModelInfoResponse {
-  model: string;
-  provider: string;
-  auto_context_length: number;
-  config_context_length: number;
-  effective_context_length: number;
-  capabilities: {
-    supports_tools?: boolean;
-    supports_vision?: boolean;
-    supports_reasoning?: boolean;
-    context_window?: number;
-    max_output_tokens?: number;
-    model_family?: string;
-  };
-}
 
 // ── Model options / assignment types ──────────────────────────────────
 

@@ -142,7 +142,6 @@ _PUBLIC_API_PATHS: frozenset = frozenset({
     "/api/status",
     "/api/config/defaults",
     "/api/config/schema",
-    "/api/model/info",
     "/api/dashboard/themes",
     "/api/dashboard/plugins",
     "/api/dashboard/plugins/rescan",
@@ -1149,101 +1148,6 @@ async def get_schema():
     return {"fields": CONFIG_SCHEMA, "category_order": _CATEGORY_ORDER}
 
 
-_EMPTY_MODEL_INFO: dict = {
-    "model": "",
-    "provider": "",
-    "auto_context_length": 0,
-    "config_context_length": 0,
-    "effective_context_length": 0,
-    "capabilities": {},
-}
-
-
-@app.get("/api/model/info")
-def get_model_info():
-    """Return resolved model metadata for the currently configured model.
-
-    Calls the same context-length resolution chain the agent uses, so the
-    frontend can display "Auto-detected: 200K" alongside the override field.
-    Also returns model capabilities (vision, reasoning, tools) when available.
-    """
-    try:
-        cfg = load_config()
-        model_cfg = cfg.get("model", "")
-
-        # Extract model name and provider from the config
-        if isinstance(model_cfg, dict):
-            model_name = model_cfg.get("default", model_cfg.get("name", ""))
-            provider = model_cfg.get("provider", "")
-            base_url = model_cfg.get("base_url", "")
-            config_ctx = model_cfg.get("context_length")
-        else:
-            model_name = str(model_cfg) if model_cfg else ""
-            provider = ""
-            base_url = ""
-            config_ctx = None
-
-        if not model_name:
-            return dict(_EMPTY_MODEL_INFO, provider=provider)
-
-        # Resolve auto-detected context length (pass config_ctx=None to get
-        # purely auto-detected value, then separately report the override)
-        try:
-            from agent.model_metadata import get_model_context_length
-            auto_ctx = get_model_context_length(
-                model=model_name,
-                base_url=base_url,
-                provider=provider,
-                config_context_length=None,  # ignore override — we want auto value
-            )
-        except Exception:
-            auto_ctx = 0
-
-        config_ctx_int = 0
-        if isinstance(config_ctx, int) and config_ctx > 0:
-            config_ctx_int = config_ctx
-
-        # Effective is what the agent actually uses
-        effective_ctx = config_ctx_int if config_ctx_int > 0 else auto_ctx
-
-        # Try to get model capabilities from models.dev
-        caps = {}
-        try:
-            from agent.models_dev import get_model_capabilities
-            mc = get_model_capabilities(provider=provider, model=model_name)
-            if mc is not None:
-                caps = {
-                    "supports_tools": mc.supports_tools,
-                    "supports_vision": mc.supports_vision,
-                    "supports_reasoning": mc.supports_reasoning,
-                    "context_window": mc.context_window,
-                    "max_output_tokens": mc.max_output_tokens,
-                    "model_family": mc.model_family,
-                }
-        except Exception:
-            pass
-
-        return {
-            "model": model_name,
-            "provider": provider,
-            "auto_context_length": auto_ctx,
-            "config_context_length": config_ctx_int,
-            "effective_context_length": effective_ctx,
-            "capabilities": caps,
-        }
-    except Exception:
-        _log.exception("GET /api/model/info failed")
-        return dict(_EMPTY_MODEL_INFO)
-
-
-# ---------------------------------------------------------------------------
-# Model assignment — pick provider+model for main slot or auxiliary slots.
-# Mirrors the model.options JSON-RPC from tui_gateway but uses REST so the
-# Models page (which has no chat PTY open) can drive it.
-# ---------------------------------------------------------------------------
-
-# Canonical auxiliary task slots. Keep in sync with DEFAULT_CONFIG["auxiliary"]
-# in mangaba_cli/config.py — listed here for deterministic ordering in the UI.
 _AUX_TASK_SLOTS: Tuple[str, ...] = (
     "vision",
     "web_extract",
@@ -4160,23 +4064,6 @@ async def update_profile_soul(name: str, body: ProfileSoulUpdate):
 class ProfileModelUpdate(BaseModel):
     model: str  # ex.: "Qwen/Qwen2.5-7B-Instruct" — default+name
     provider: Optional[str] = None  # slug do picker (anthropic, copilot, custom, …)
-
-
-@app.get("/api/profiles/{name}/model")
-async def get_profile_model(name: str):
-    """Lê o modelo configurado no config.yaml de um profile específico,
-    sem precisar trocar o profile ativo."""
-    import yaml
-
-    cfg_path = _resolve_profile_dir(name) / "config.yaml"
-    try:
-        cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) if cfg_path.exists() else {}
-    except Exception:
-        cfg = {}
-    m = (cfg or {}).get("model")
-    if isinstance(m, dict):
-        return {"model": m.get("default") or m.get("name") or "", "provider": m.get("provider", "")}
-    return {"model": m or "", "provider": ""}
 
 
 @app.put("/api/profiles/{name}/model")
