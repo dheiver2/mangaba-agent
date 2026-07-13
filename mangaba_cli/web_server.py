@@ -5139,6 +5139,66 @@ def _chat_profile_mcp_servers(prof_home: Path) -> Dict[str, dict]:
     }
 
 
+def _profile_api_server_endpoint(agent_profile: str) -> Optional[str]:
+    """Base URL do api_server do profile SE o gateway dele estiver no ar.
+
+    Fidelidade total do chat encarnado: falar com o gateway do próprio profile
+    (que já carrega persona, modelo, skills, MCP **e plugins** daquele agente)
+    em vez de reconstruir tudo in-process. Retorna None quando o gateway está
+    parado ou não expõe api_server — o chamador cai no build in-process.
+    """
+    from mangaba_cli import fleet as _fleet
+
+    m = _fleet.find_member(agent_profile)
+    if m is None or not m.running:
+        return None
+    try:
+        cfg = yaml.safe_load((m.path / "config.yaml").read_text(encoding="utf-8")) or {}
+    except Exception:  # noqa: BLE001
+        return None
+    plats = cfg.get("platforms") or {}
+    api = plats.get("api_server") if isinstance(plats, dict) else None
+    if not isinstance(api, dict):
+        return None
+    if str(api.get("enabled", "true")).lower() in ("false", "0", "no"):
+        return None
+    port = api.get("port")
+    if not isinstance(port, int) or port <= 0:
+        return None
+    return f"http://127.0.0.1:{port}"
+
+
+def _delegate_chat_to_gateway(
+    endpoint: str, message: str, history: List[Dict[str, Any]]
+) -> Optional[str]:
+    """Manda um turno ao api_server do profile (/v1/chat/completions, sem stream).
+
+    Best-effort e síncrono (roda em executor). Retorna o texto da resposta, ou
+    None para sinalizar fallback (gateway não respondeu / erro) — nunca levanta.
+    """
+    import json as _json
+    import urllib.request
+
+    msgs = [{"role": h.get("role", "user"), "content": h.get("content", "")}
+            for h in history if h.get("content")]
+    msgs.append({"role": "user", "content": message})
+    body = _json.dumps({"model": "mangaba", "messages": msgs, "stream": False}).encode("utf-8")
+    try:
+        req = urllib.request.Request(f"{endpoint}/v1/chat/completions", data=body)
+        req.add_header("Content-Type", "application/json")
+        with urllib.request.urlopen(req, timeout=180) as resp:
+            payload = _json.loads(resp.read().decode("utf-8"))
+        choices = payload.get("choices") or []
+        if choices:
+            content = (choices[0].get("message") or {}).get("content")
+            if isinstance(content, str) and content.strip():
+                return content
+        return None
+    except Exception as exc:  # noqa: BLE001
+        _log.debug("delegação ao gateway do profile falhou (fallback in-process): %s", exc)
+        return None
+
+
 def _build_chat_agent(
     model_override: str = None,
     provider_override: str = None,
@@ -5359,6 +5419,28 @@ async def chat_ws(ws: WebSocket) -> None:
             model = (data.get("model") or "").strip() or None
             provider = (data.get("provider") or "").strip() or None
             agent_profile = (data.get("agent") or "").strip() or None
+
+            # Item 5 — fidelidade total: se o agente selecionado tem gateway
+            # PRÓPRIO no ar (com api_server), delega o turno a ele. Roda no
+            # processo do profile → persona, modelo, skills, MCP E plugins do
+            # agente, sem reconstruir nada aqui. Fallback silencioso ao build
+            # in-process quando o gateway está parado ou não responde.
+            if agent_profile:
+                endpoint = _profile_api_server_endpoint(agent_profile)
+                if endpoint:
+                    if agent_profile != built_profile:
+                        history = []
+                        built_profile = agent_profile
+                    await ws.send_json({"type": "status", "text": "Falando com o gateway do agente…"})
+                    delegated = await loop.run_in_executor(
+                        None, lambda: _delegate_chat_to_gateway(endpoint, message, list(history))
+                    )
+                    if delegated is not None:
+                        history.append({"role": "user", "content": message})
+                        history.append({"role": "assistant", "content": delegated})
+                        await ws.send_json({"type": "done", "text": delegated})
+                        continue
+                    # gateway não respondeu → segue para o build in-process abaixo
 
             # (Re)constrói o agente na primeira mensagem ou quando o modelo
             # ou o agente (profile) selecionado muda. Trocar de agente zera o
