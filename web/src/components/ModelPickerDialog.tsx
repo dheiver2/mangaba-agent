@@ -5,31 +5,20 @@ import { Spinner } from "@dheiver2/ui/ui/components/spinner";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { fetchJSON } from "@/lib/api";
-import type { GatewayClient } from "@/lib/gatewayClient";
 import { Check, Search, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { cn, themedBody } from "@/lib/utils";
 
 /**
- * Two-stage model picker modal.
+ * Two-stage model picker modal (ModelsPage, Config settings).
  *
  * Mirrors ui-tui/src/components/modelPicker.tsx:
  *   Stage 1: pick provider (authenticated providers only)
  *   Stage 2: pick model within that provider
  *
- * Two invocation modes:
- *
- * 1. Chat-session mode (ChatSidebar) — pass `gw` + `sessionId`. The picker
- *    loads options via `model.options` JSON-RPC and emits the result as a
- *    slash command string (`/model <model> --provider <slug> [--global]`)
- *    through `onSubmit`, which the ChatPage pipes to `slashExec`.
- *
- * 2. Standalone mode (ModelsPage, Config settings) — pass a `loader` and
- *    `onApply`. The picker fetches options via the REST endpoint and calls
- *    `onApply(provider, model, persistGlobal)` instead of emitting a slash
- *    command.  This lets the Models page reuse the same UI without
- *    requiring an open chat PTY.
+ * Pass a `loader` (fetches the REST options endpoint) and `onApply`
+ * (receives provider, model, persistGlobal when the user confirms).
  */
 
 interface ModelOptionProvider {
@@ -54,14 +43,8 @@ interface ModelOptionsResponse {
 }
 
 interface Props {
-  /** Chat-mode: when present, picker emits a slash command via onSubmit. */
-  gw?: GatewayClient;
-  sessionId?: string;
-  onSubmit?(slashCommand: string): void;
-
-  /** Standalone-mode: when present (and onSubmit absent), picker calls onApply. */
-  loader?(): Promise<ModelOptionsResponse>;
-  onApply?(args: {
+  loader(): Promise<ModelOptionsResponse>;
+  onApply(args: {
     provider: string;
     model: string;
     persistGlobal: boolean;
@@ -75,16 +58,12 @@ interface Props {
 
 export function ModelPickerDialog(props: Props) {
   const {
-    gw,
-    sessionId,
-    onSubmit,
     loader,
     onApply,
     onClose,
     title = "Switch Mangaba Model",
     alwaysGlobal = false,
   } = props;
-  const standalone = !!loader && !!onApply;
 
   const [providers, setProviders] = useState<ModelOptionProvider[]>([]);
   const [currentModel, setCurrentModel] = useState("");
@@ -104,14 +83,7 @@ export function ModelPickerDialog(props: Props) {
     setLoading(true);
     setError(null);
 
-    const promise = standalone
-      ? (loader as () => Promise<ModelOptionsResponse>)()
-      : (gw as GatewayClient).request<ModelOptionsResponse>(
-          "model.options",
-          sessionId ? { session_id: sessionId } : {},
-        );
-
-    promise
+    loader()
       .then((r) => {
         if (closedRef.current) return;
         const next = [...(r?.providers ?? [])].sort(
@@ -193,26 +165,18 @@ export function ModelPickerDialog(props: Props) {
 
   const confirm = async () => {
     if (!canConfirm || !selectedProvider) return;
-    if (standalone && onApply) {
-      setApplying(true);
-      try {
-        await onApply({
-          provider: selectedProvider.slug,
-          model: selectedModel,
-          persistGlobal,
-        });
-        onClose();
-      } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
-      } finally {
-        setApplying(false);
-      }
-    } else if (onSubmit) {
-      const global = persistGlobal ? " --global" : "";
-      onSubmit(
-        `/model ${selectedModel} --provider ${selectedProvider.slug}${global}`,
-      );
+    setApplying(true);
+    try {
+      await onApply({
+        provider: selectedProvider.slug,
+        model: selectedModel,
+        persistGlobal,
+      });
       onClose();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setApplying(false);
     }
   };
 

@@ -463,31 +463,6 @@ class TestReadmeNoLongerSaysWindowsUnsupported:
 
 
 # ---------------------------------------------------------------------------
-# pty_bridge graceful import on Windows
-# ---------------------------------------------------------------------------
-
-
-class TestWebServerPtyBridgeGuard:
-    """The web server must not crash if pty_bridge can't import (Windows)."""
-
-    def test_import_guard_present_in_source(self):
-        root = Path(__file__).resolve().parents[2]
-        source = (root / "mangaba_cli" / "web_server.py").read_text(encoding="utf-8")
-        assert "_PTY_BRIDGE_AVAILABLE" in source
-        assert "except ImportError" in source, (
-            "web_server.py must wrap the pty_bridge import in try/except ImportError"
-        )
-
-    def test_pty_handler_checks_availability_flag(self):
-        """The /api/pty handler must short-circuit when the bridge is unavailable."""
-        root = Path(__file__).resolve().parents[2]
-        source = (root / "mangaba_cli" / "web_server.py").read_text(encoding="utf-8")
-        assert "if not _PTY_BRIDGE_AVAILABLE" in source, (
-            "/api/pty handler must return a friendly error when PTY is unavailable"
-        )
-
-
-# ---------------------------------------------------------------------------
 # Entry points wire configure_windows_stdio
 # ---------------------------------------------------------------------------
 

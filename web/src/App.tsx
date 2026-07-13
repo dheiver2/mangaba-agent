@@ -244,6 +244,9 @@ function buildNavItems(
   for (const manifest of manifests) {
     if (manifest.tab.override) continue;
     if (manifest.tab.hidden) continue;
+    // Uma página que já tem entrada builtin (ex.: Kanban) não ganha uma
+    // segunda entrada vinda do plugin — dedupe por path.
+    if (items.some((i) => i.path === manifest.tab.path)) continue;
 
     const pluginItem: NavItem = {
       path: manifest.tab.path,

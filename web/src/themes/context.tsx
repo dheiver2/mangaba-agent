@@ -32,7 +32,7 @@ export const NIGHT_THEME = "mangaba-pro";
 export const DAY_THEME   = "mangaba-light";
 
 /** Light-background theme names — used to derive `isDark`. */
-const LIGHT_THEME_NAMES = new Set([DAY_THEME, "rose"]);
+const LIGHT_THEME_NAMES = new Set([DAY_THEME]);
 
 /** Tracks fontUrls we've already injected so multiple theme switches don't
  *  pile up <link> tags. Keyed by URL. */
